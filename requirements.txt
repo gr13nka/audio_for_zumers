@@ -1,0 +1,4 @@
+vosk
+ffmpeg
+telegram
+python-telegram-bot
