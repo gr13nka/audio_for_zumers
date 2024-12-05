@@ -66,10 +66,11 @@ def generate_subtitles(audio_path: str, recognized_text: str, subtitle_path: str
                 index += 1
 
     wf.close()
-
+    print("subtitles created")
     # Сохраняем субтитры в .srt файл
     with open(subtitle_path, "w", encoding="utf-8") as srt_file:
         srt_file.writelines(subtitles)
+        print("subtitles written to file")
 
 def replace_audio(video_path: str, audio_path: str, output_path: str) -> None:
     """
@@ -128,7 +129,41 @@ def transcribe_audio(audio_path: str) -> str:
             text_result.append(result.get("text", ""))
 
     wf.close()
+    print("text Recognized", text_result)
     return " ".join(text_result)
+
+
+import platform
+import os
+
+def normalize_path(path: str) -> str:
+    """
+    Normalizes the path for use with FFmpeg, ensuring compatibility on Windows.
+    Converts backslashes to forward slashes if running on Windows.
+
+    :param path: The original file path.
+    :return: The normalized path.
+    """
+    if platform.system() == "Windows":
+        return os.path.normpath(path).replace("\\", "/")
+    return os.path.normpath(path)
+
+
+def add_text_to_video(video_path: str, output_path: str, text: str) -> None:
+    """
+    Добавляет текст поверх видео с помощью ffmpeg.
+    """
+    # Убираем опасные символы
+    text_safe = text.replace("'", "\\'").replace('"', '\\"')
+
+    # Формируем фильтр drawtext
+    drawtext_filter = f"drawtext=text='{text_safe}':fontcolor=white:fontsize=24:x=(w-text_w)/2:y=h-50"
+
+    # Запускаем ffmpeg
+    subprocess.run([
+        'ffmpeg', '-i', video_path, '-vf', drawtext_filter, '-codec:a', 'copy', output_path
+    ], check=True)
+
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
@@ -153,9 +188,9 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         print("Conversion complete.")
 
         # Распознаем текст из голосового сообщения
-        print("Transcribing audio...")
+        print("===Transcribing audio...")
         recognized_text = transcribe_audio(audio_path)
-        print(f"Recognized text: {recognized_text}")
+        print(f"===Recognized text: {recognized_text}")
 
         if not recognized_text.strip():
             await update.message.reply_text("Не удалось распознать текст. Попробуй снова.")
@@ -163,12 +198,12 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         # Генерация субтитров
         subtitle_path = os.path.join(TEMP_DIR, f"subtitles_{update.message.chat_id}.srt")
-        print("Generating subtitles...")
+        print("===Generating subtitles...")
         generate_subtitles(audio_path, recognized_text, subtitle_path)
         print(f"Subtitles saved to {subtitle_path}.")
 
         # Выбираем случайное видео из папки
-        print("Selecting random video...")
+        print("===Selecting random video...")
         video_path = random.choice([os.path.join(VIDEO_DIR, f) for f in os.listdir(VIDEO_DIR)])
         trimmed_video_path = os.path.join(TEMP_DIR, f"trimmed_{update.message.chat_id}.mp4")
         video_with_audio_path = os.path.join(TEMP_DIR, f"video_audio_{update.message.chat_id}.mp4")
@@ -176,15 +211,21 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         # Обрезаем видео до длины голосового сообщения
         voice_duration = update.message.voice.duration  # Длительность голосового сообщения в секундах
-        print(f"Trimming video to {voice_duration} seconds...")
+        print(f"===Trimming video to {voice_duration} seconds...")
         trim_video(video_path, trimmed_video_path, voice_duration)
 
         # Заменяем звуковую дорожку
-        print("Replacing audio in video...")
+        print("===Replacing audio in video...")
         replace_audio(trimmed_video_path, audio_path, video_with_audio_path)
 
         # Накладываем субтитры на видео
-        print("Adding subtitles to video...")
+        print("===Adding subtitles to video...")
+
+        # normalize_path for windows 
+        subtitle_path = normalize_path(os.path.join(TEMP_DIR, f"subtitles_{update.message.chat_id}.srt"))
+        video_with_audio_path = normalize_path(os.path.join(TEMP_DIR, f"video_audio_{update.message.chat_id}.mp4"))
+        output_path = normalize_path(os.path.join(TEMP_DIR, f"output_{update.message.chat_id}.mp4"))
+
         subprocess.run([
             'ffmpeg', '-i', video_with_audio_path, '-vf', f"subtitles={subtitle_path}:force_style='FontSize=24'",
             '-c:a', 'copy', output_path
@@ -207,25 +248,6 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         print("Cleaning up temporary files...")
         clean_temp_files(update.message.chat_id)
         print("Cleanup complete.")
-
-
-
-
-
-def add_text_to_video(video_path: str, output_path: str, text: str) -> None:
-    """
-    Добавляет текст поверх видео с помощью ffmpeg.
-    """
-    # Убираем опасные символы
-    text_safe = text.replace("'", "\\'").replace('"', '\\"')
-
-    # Формируем фильтр drawtext
-    drawtext_filter = f"drawtext=text='{text_safe}':fontcolor=white:fontsize=24:x=(w-text_w)/2:y=h-50"
-
-    # Запускаем ffmpeg
-    subprocess.run([
-        'ffmpeg', '-i', video_path, '-vf', drawtext_filter, '-codec:a', 'copy', output_path
-    ], check=True)
 
 
 def clean_temp_files(chat_id: int) -> None:
