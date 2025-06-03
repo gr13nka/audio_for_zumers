@@ -9,32 +9,58 @@ from telegram import Update
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, filters, ContextTypes
 )
+import platform
+import os
+import platform
+import glob
 
 # Путь к директориям
 VIDEO_DIR = "videos"  # Папка с паркур-видео
 TEMP_DIR = "temp"  # Папка для временных файлов
 MODEL_DIR = "model"  # Папка с Vosk-моделью по умолчанию там маленькая, но можно скачать поумнее вот тут https://alphacephei.com/vosk/models архив распаковать и положить в папку
-YOUR_BOT_TOKEN = ""
+YOUR_BOT_TOKEN = "7872793386:AAEVh1YUgrAOdhi9NjBvpzUcyO80Mz-dVfg"
+
+# Безопасность - только авторизованные пользователи могут использовать бота
+AUTHORIZED_USER_ID = 332605674  # ID владельца бота
 # Убедитесь, что временная папка существует
 os.makedirs(TEMP_DIR, exist_ok=True)
 
-import platform
+  
 
-# Detect Windows and modify PATH for FFmpeg dynamically
-if platform.system() == "Windows":
-    print('Windows detected')
-    ffmpeg_bin_path = os.path.join(".", "ffmpeg", "ffmpeg-7.1-essentials_build", "bin")
-    os.environ["PATH"] = f"{ffmpeg_bin_path};{os.environ['PATH']}"
-    print('succesfuly ffmpeg added to path')
-   
+def find_ffmpeg_bin():
+    # Ищем папки с ffmpeg в ./ffmpeg/
+    ffmpeg_dirs = glob.glob("./ffmpeg/ffmpeg-*-essentials_build/bin/ffmpeg.exe")
+    if ffmpeg_dirs:
+        # Берём первый найденный файл (обычно будет один)
+        print("ffmpeg succesfuly found!")
+        return os.path.normpath(ffmpeg_dirs[0])
+    else:
+        raise FileNotFoundError("ffmpeg.exe не найден. Проверьте, что он есть в ./ffmpeg/ffmpeg-*/bin/")
+
+
+def is_user_authorized(user_id: int) -> bool:
+    """
+    Проверяет, авторизован ли пользователь для использования бота.
+    
+    :param user_id: ID пользователя Telegram.
+    :return: True, если пользователь авторизован, иначе False.
+    """
+    return user_id == AUTHORIZED_USER_ID
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Обработка команды /start.
     """
-    await update.message.reply_text(
-        "Привет! Отправь мне голосовое сообщение, и я создам видео с паркуром и текстом из твоего сообщения."
-    )
+    user_id = update.effective_user.id
+    
+    if is_user_authorized(user_id):
+        await update.message.reply_text(
+            "Привет! Отправь мне голосовое сообщение, и я создам видео с паркуром и текстом из твоего сообщения."
+        )
+    else:
+        await update.message.reply_text(
+            "Извините, у вас нет доступа к этому боту. Он предназначен только для личного использования."
+        )
 
 def generate_subtitles(audio_path: str, recognized_text: str, subtitle_path: str) -> None:
     """
@@ -81,7 +107,7 @@ def replace_audio(video_path: str, audio_path: str, output_path: str) -> None:
     :param output_path: Путь для сохранения результата.
     """
     subprocess.run([
-        'ffmpeg', '-i', video_path, '-i', audio_path, '-c:v', 'copy', '-map', '0:v:0', '-map', '1:a:0',
+        ffmpeg_cmd, '-i', video_path, '-i', audio_path, '-c:v', 'copy', '-map', '0:v:0', '-map', '1:a:0',
         '-shortest', output_path
     ], check=True)
 
@@ -107,7 +133,7 @@ def trim_video(video_path: str, output_path: str, duration: float) -> None:
     :param duration: Длительность обрезанного видео в секундах.
     """
     subprocess.run([
-        'ffmpeg', '-i', video_path, '-t', str(duration), '-c:v', 'libx264', '-c:a', 'aac', output_path
+        ffmpeg_cmd, '-i', video_path, '-t', str(duration), '-c:v', 'libx264', '-c:a', 'aac', output_path
     ], check=True)
 
 def transcribe_audio(audio_path: str) -> str:
@@ -132,9 +158,6 @@ def transcribe_audio(audio_path: str) -> str:
     print("text Recognized", text_result)
     return " ".join(text_result)
 
-
-import platform
-import os
 
 def normalize_path(path: str) -> str:
     """
@@ -161,7 +184,7 @@ def add_text_to_video(video_path: str, output_path: str, text: str) -> None:
 
     # Запускаем ffmpeg
     subprocess.run([
-        'ffmpeg', '-i', video_path, '-vf', drawtext_filter, '-codec:a', 'copy', output_path
+        ffmpeg_cmd, '-i', video_path, '-vf', drawtext_filter, '-codec:a', 'copy', output_path
     ], check=True)
 
 
@@ -169,6 +192,16 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     """
     Обработка голосового сообщения.
     """
+    user_id = update.effective_user.id
+    
+    # Проверяем, авторизован ли пользователь
+    if not is_user_authorized(user_id):
+        await update.message.reply_text(
+            "Извините, у вас нет доступа к этому боту. Он предназначен только для личного использования."
+        )
+        print(f"Unauthorized access attempt from user ID: {user_id}")
+        return
+        
     try:
         # Log start of processing
         print("Started processing voice message...")
@@ -184,7 +217,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         # Конвертируем голосовое сообщение в WAV для Vosk
         print("Converting voice message to WAV format...")
-        subprocess.run(['ffmpeg', '-y', '-i', voice_path, '-ar', '16000', '-ac', '1', audio_path], check=True)
+        subprocess.run([ffmpeg_cmd, '-y', '-i', voice_path, '-ar', '16000', '-ac', '1', audio_path], check=True)
         print("Conversion complete.")
 
         # Распознаем текст из голосового сообщения
@@ -193,8 +226,8 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         print(f"===Recognized text: {recognized_text}")
 
         if not recognized_text.strip():
-            await update.message.reply_text("Не удалось распознать текст. Попробуй снова.")
-            return
+            await update.message.reply_text("Не удалось распознать текст.")
+            recognized_text = " "
 
         # Генерация субтитров
         subtitle_path = os.path.join(TEMP_DIR, f"subtitles_{update.message.chat_id}.srt")
@@ -225,9 +258,8 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         subtitle_path = normalize_path(os.path.join(TEMP_DIR, f"subtitles_{update.message.chat_id}.srt"))
         video_with_audio_path = normalize_path(os.path.join(TEMP_DIR, f"video_audio_{update.message.chat_id}.mp4"))
         output_path = normalize_path(os.path.join(TEMP_DIR, f"output_{update.message.chat_id}.mp4"))
-
         subprocess.run([
-            'ffmpeg', '-i', video_with_audio_path, '-vf', f"subtitles={subtitle_path}:force_style='FontSize=24'",
+            ffmpeg_cmd, '-i', video_with_audio_path, '-vf', f"subtitles={subtitle_path}:force_style='FontSize=24'",
             '-c:a', 'copy', output_path
         ], check=True)
         print("Video processing complete.")
@@ -269,14 +301,32 @@ def main():
     # Создаём приложение
     application = Application.builder().token(YOUR_BOT_TOKEN).connection_pool_size(20).connect_timeout(60).read_timeout(60).build()
 
-
     # Добавляем обработчики
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.VOICE, handle_voice))
+    
+    # Добавляем обработчик для всех остальных сообщений
+    application.add_handler(MessageHandler(
+        filters.ALL & ~filters.COMMAND & ~filters.VOICE, 
+        lambda update, context: handle_unauthorized_message(update, context)
+    ))
 
     # Запускаем приложение
     application.run_polling()
 
+async def handle_unauthorized_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Обработка всех остальных сообщений от неавторизованных пользователей.
+    """
+    user_id = update.effective_user.id
+    
+    if not is_user_authorized(user_id):
+        await update.message.reply_text(
+            "Извините, у вас нет доступа к этому боту. Он предназначен только для личного использования."
+        )
+        print(f"Unauthorized message from user ID: {user_id}")
+
 
 if __name__ == "__main__":
+    ffmpeg_cmd = find_ffmpeg_bin()
     main()
